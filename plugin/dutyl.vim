@@ -26,3 +26,18 @@ call dutyl#register#module('dcd','dutyl#dcd#new',20)
 call dutyl#register#module('dfmt','dutyl#dfmt#new',30)
 call dutyl#register#module('dscanner','dutyl#dscanner#new',60)
 call dutyl#register#module('configFile','dutyl#configFile#new',100)
+
+
+" Autocommands
+" ============================================================================
+
+augroup vim-dutyl
+    autocmd!
+
+    " code formatting on save
+    if get(g:, "dutyl_dfmt_autosave", 1)
+        autocmd BufWritePre *.d call dutyl#dfmt#Format()
+    endif
+
+augroup END
+

@@ -8,6 +8,7 @@ function! dutyl#dfmt#new() abort
     return l:result
 endfunction
 
+
 let s:functions={}
 
 function! s:getIndentFrom(code) abort
@@ -110,4 +111,111 @@ function! s:functions.calcIndentForLastLineOfCode(code) abort
     endif
 
     return strwidth(s:getIndentFrom(l:code)) - strwidth(s:getIndentFrom(l:formattedCode)) + strwidth(matchstr(l:formattedCode[l:lineIndex], '\v^\_s*\ze\S'))
+endfunction
+
+
+
+" This part is shamelesly borrowed from https://github.com/fatih/vim-go
+" under BSD license.
+
+if !exists('g:dutyl_fmt_fail_silently')
+    let g:dutyl_fmt_fail_silently = 0
+endif
+
+if !exists('g:dutyl_fmt_options')
+    let g:dutyl_fmt_options = []
+endif
+
+if !exists("g:dutyl_fmt_experimental")
+    let g:dutyl_fmt_experimental = 0
+endif
+
+let s:got_fmt_error = 0
+
+"  we have those problems :
+"  http://stackoverflow.com/questions/12741977/prevent-vim-from-updating-its-undo-tree
+"  http://stackoverflow.com/questions/18532692/golang-formatter-and-vim-how-to-destroy-history-record?rq=1
+"
+"  The below function is an improved version that aims to fix all problems.
+"  it doesn't undo changes and break undo history.  If you are here reading
+"  this and have VimL experience, please look at the function for
+"  improvements, patches are welcome :)
+function! dutyl#dfmt#Format() abort
+    " save cursor position and many other things
+    let l:curw=winsaveview()
+
+    " Write current unsaved buffer to a temp file
+    let l:tmpname = tempname()
+    call writefile(getline(1, '$'), l:tmpname)
+
+    if g:dutyl_fmt_experimental == 1
+        " save our undo file to be restored after we are done. This is needed to
+        " prevent an additional undo jump due to BufWritePre auto command and also
+        " restore 'redo' history because it's getting being destroyed every
+        " BufWritePre
+        let tmpundofile=tempname()
+        exe 'wundo! ' . tmpundofile
+    endif
+    let l:args = ['--inplace', l:tmpname]
+    for l:fmtarg in g:dutyl_fmt_options
+        call add(l:args, l.fmtarg)
+    endfor
+    echom l:tmpname
+
+    " execute our command...
+    let out = dutyl#core#runTool('dfmt', l:args)
+
+    "if there is no error on the temp file replace the output with the current
+    "file (if this fails, we can always check the outputs first line with:
+    "splitted =~ 'package \w\+')
+    if v:shell_error == 0
+        " remove undo point caused via BufWritePre
+        try | silent undojoin | catch | endtry
+
+        " Replace current file with temp file, then reload buffer
+        call rename(l:tmpname, expand('%'))
+        silent edit!
+        let &syntax = &syntax
+
+        " only clear quickfix if it was previously set, this prevents closing
+        " other quickfixes
+        if s:got_fmt_error
+            let s:got_fmt_error = 0
+            call setqflist([])
+            cwindow
+        endif
+    elseif g:dutyl_fmt_fail_silently == 0
+        let splitted = split(out, '\n')
+        "otherwise get the errors and put them to quickfix window
+        let errors = []
+        for line in splitted
+            let tokens = matchlist(line, '^\(.\{-}\):\(\d\+\):\(\d\+\)\s*\(.*\)')
+            if !empty(tokens)
+                call add(errors, {"filename": @%,
+                            \"lnum":     tokens[2],
+                            \"col":      tokens[3],
+                            \"text":     tokens[4]})
+            endif
+        endfor
+        if empty(errors)
+            % | " Couldn't detect dfmt error format, output errors
+        endif
+        if !empty(errors)
+            call setqflist(errors, 'r')
+            echohl Error | echomsg "dfmt returned error" | echohl None
+        endif
+        let s:got_fmt_error = 1
+        cwindow
+        " We didn't use the temp file, so clean up
+        call delete(l:tmpname)
+    endif
+
+    if g:dutyl_fmt_experimental == 1
+        " restore our undo history
+        silent! exe 'rundo ' . tmpundofile
+        call delete(tmpundofile)
+    endif
+
+    " restore our cursor/windows positions
+    call winrestview(l:curw)
 endfunction
